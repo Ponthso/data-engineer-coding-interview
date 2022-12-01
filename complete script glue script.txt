@@ -1,0 +1,268 @@
+##################
+# Glue Catalog   #
+##################
+import boto3
+
+glue_client = boto3.client("glue")
+
+response = glue_client.create_table(
+    DatabaseName='mypostgresdb',
+    TableInput={
+        'Name': 'LoansData',
+    'StorageDescriptor': {
+      'Columns': [
+	  {'Name': 'Bank Name',
+        'Type': 'varchar'},
+		
+		{'Name': 'LoanAmount',
+        'Type': 'bigint'},
+	  {
+        'Name': 'year',
+        'Type': 'bigint'
+      }, 
+	  {
+        'Name': 'month',
+        'Type': 'varchar'
+      }],
+      'Location': 's3://Technical_assesment/input/BankData/csv',
+      'InputFormat': 'InputFormat',
+      'OutputFormat': 'OutputFormat',
+      'Compressed': False,
+      'NumberOfBuckets': -1,
+      'SerdeInfo': {
+        'SerializationLibrary': 'SerializationLibrary',
+        'Parameters': {
+          'field.delim': ',',
+          'serialization.format': ','
+        }
+      },
+    },
+    'PartitionKeys': [{
+      'Name': 'Bank Name',
+      'Type': 'string',
+	  
+	  'Name': 'year',
+      'Type': 'bigint',
+	  
+	  'Name': 'month',
+      'Type': 'string'
+    }],
+	
+	'TableType': 'EXTERNAL_TABLE',
+    'Parameters': {
+      'EXTERNAL': 'TRUE',
+      'classification': 'csv',
+      'columnsOrdered': 'true',
+      'compressionType': 'none',
+      'delimiter': ',',
+      'skip.header.line.count': '1',
+      'typeOfData': 'file'
+    }
+    }
+)                 
+###################################################################################################
+# Glue Crawler   #
+###################################################################################################
+try:
+    response = client.create_crawler(
+        Name='Technical_assesment_crawler',
+        Role='AWSTechRole-glueEtl',
+        DatabaseName='python-glueworkshop',
+        Targets={
+            'S3Targets': [
+                {
+                    'Path': 's3://Technical_assesment/input/BankData/csv'.format(BUCKET_NAME = Technical_assesment),
+                }   
+            ]
+        },
+        TablePrefix='python-'
+    )
+    print("Successfully created crawler")
+except:
+    print("error in creating crawler")
+###################################################################################################
+# Glue Job #
+####################################################################################################
+
+import sys
+import os
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from airflow import models
+from airflow.providers.amazon.aws.transfers.s3_to_sftp import S3ToSFTPOperator
+from airflow.utils.dates import days_ago
+
+# importing pandas as pd
+import pandas as pd
+# importing numpy as np
+# for Mathematical calculations
+import numpy as np
+#importing time-series
+importing time-series data
+ 
+args = getResolvedOptions(sys.argv, ['Bank_loans_load'])
+ 
+sparkContext = SparkContext()
+glueContext = GlueContext(sparkContext)
+sparkSession = glueContext.spark_session
+ 
+
+ 
+glueJob = Job(glueContext)
+glueJob.init(args['Bank_loans_load'], args)
+
+##Reading the data from the DB
+BankData = glueContext.create_dynamic_frame.from_catalog(database = "DBNAME", table_name = "LoansData", transformation_ctx = "BankData")
+ 
+##Convert DataFrames to AWS Glue's DynamicFrames Object
+BankData = DynamicFrame.fromDF(source_df, glueContext, "BankData")
+
+
+ 
+##Write the DataFrame as a file in CSV format to a folder in an S3 bucket.
+BankData = glueContext.write_dynamic_frame.from_options(frame = BankData, connection_type = "s3", connection_options = {"path": "s3://Technical_assesment/outfiles"}, format = "csv", transformation_ctx = "BankData")
+
+####################################################Data transformations#################################################################################
+
+BankData = pd.read_csv('BankData.NS.csv', index_col='Dates',
+                       parse_dates=True)
+ 
+# using .to_frame() to convert pandas series
+##into dataframe.
+BankData = BankData['Loans'].to_frame()
+ 
+#calculating simple moving average
+using .rolling(window).mean() ,
+ with window size = 90
+BankData['SMA90'] = BankData['Loans'].rolling(90).mean()
+
+## Write the transformed dataset back to s3 
+BankData = glueContext.write_dynamic_frame.from_options(frame = BankData, connection_type = "s3", connection_options = {"path": "s3://Technical_assesment/outfiles", 
+"partitionKeys": ["Bank Name", "Year", "Month"]}, format = "parquet", transformation_ctx = "BankData")
+
+
+
+#partitionBy() control number of partitions
+BankData.write.option("header",True) \
+        .option("maxRecordsPerFile", 3) \
+        .partitionBy("Bank_name","Year","Month") \
+        .mode("overwrite") \
+        .csv("/tmp/BankName_YYYYMMDD")
+
+##############################################transfer data fron s3 to sftp server#######################################################
+
+S3_BUCKET = os.environ.get("S3_BUCKET", "Technical_assesment")
+S3_KEY = os.environ.get("S3_KEY", "Sdtfdegfdfdujgffv1e698fbacXXXXXXXXXXXXXXXXXXX")
+
+with models.DAG(
+    "sftpgolobal.myBank.net",
+    schedule_interval=None,
+	
+# Override to match your needs
+    start_date=days_ago(1),  
+) as dag:
+
+    # [START s3_transfer_data_to_sftp]
+	
+    connection_s3_to_sftp_job = S3ToSFTPOperator(
+        task_id="connection_s3_to_sftp_job",
+        sftp_conn_id="sftp_conn_id",
+        sftp_path="sftp_path",
+        s3_conn_id="s3_conn_id",
+        s3_bucket=S3_BUCKET,
+        s3_key=S3_KEY,
+    )
+
+glueJob.commit()
+
+
+
+#################################################################################################
+#The script to create a schedule#
+#scheduling job script
+from datetime import datetime, timedelta
+from airflow.models import DAG
+
+# Parameteres
+WORFKLOW_DAG_ID = "Bank_loans_load"
+WORFKFLOW_START_DATE = datetime.datetime(2022,12,1)
+WORKFLOW_SCHEDULE_INTERVAL = "@daily"
+WORKFLOW_EMAIL = ["data-support@mybigbank.co.za"]
+
+WORKFLOW_DEFAULT_ARGS = {
+    "owner": "Pontsho",
+    "start_date": WORFKFLOW_START_DATE,
+    "email": WORKFLOW_EMAIL,
+    "email_on_failure": True,
+    "email_on_retry": False,
+    "retries": 2,
+	"retry_delay": timedelta(minutes=5),
+}
+# Initialize DAG
+dag = DAG(
+    dag_id=WORFKLOW_DAG_ID,
+    schedule_interval=WORKFLOW_SCHEDULE_INTERVAL,
+    default_args=WORKFLOW_DEFAULT_ARGS,
+)
+
+##########################################################################
+##the script to create the s3_bucket
+#creating an s3 bucket
+
+import logging
+import boto3
+from botocore.exceptions import ClientError
+
+
+def create_bucket("Technical_assesment", region="us-east-1"):
+    try:
+        if region is None:
+            s3_client = boto3.client('s3')
+            s3_client.create_bucket(Bucket="Technical_assesment")
+        else:
+            s3_client = boto3.client('s3', region_name="us-east-1")
+            location = {'LocationConstraint': "us-east-1"}
+            s3_client.create_bucket(Bucket="Technical_assesment",
+                                    CreateBucketConfiguration=location)
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+	
+	
+#############################################################################################
+##Script to create SFTP Server###
+
+	
+provider"aws" {
+
+  region = "us-east-1"
+
+}
+module"sftp" {
+
+  source      = "myBank/sftp/aws"
+
+  name        = "sftpgolobal.myBank.net"
+
+  environment = "PRODUCTION"
+
+  label_order = ["environment", "name"]
+
+
+
+  enable_sftp   =true
+
+  public_key    ="ssh-rsa AAAAB3Nzaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+  user_name     ="mybank00"
+
+  s3_bucket_id  =module.g###AAAAB3Nzaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+  endpoint_type = "PUBLIC"
+
+}
